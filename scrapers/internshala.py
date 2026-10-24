@@ -24,12 +24,10 @@ logger = logging.getLogger("scraper.internshala")
 SOURCE_NAME = "internshala"
 ROOT = "https://internshala.com"
 
-# Stage 1: find the neighbourhood of text right after an "apply by" style phrase
 DEADLINE_CONTEXT_PATTERNS = [
     re.compile(r"apply\s+by\s+(.{3,40})", re.IGNORECASE),
     re.compile(r"last\s+date\s+to\s+apply\s*[:\-]?\s*(.{3,40})", re.IGNORECASE),
 ]
-# Stage 2: pull just the date token out of that window
 DATE_TOKEN_PATTERN = re.compile(
     r"(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:['\s]*\d{2,4})?"
     r"|[A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{2,4})?)"
@@ -110,7 +108,7 @@ def parse_listing_card(card) -> dict | None:
             "stipend_text": stipend_text,
             "stipend_amount": extract_stipend_number(stipend_text),
             "duration": duration,
-            "apply_by": "",  # filled in later for new listings only
+            "apply_by": "",  # filled in later
             "posted": posted,
             "link": link,
             "description": description,
@@ -122,7 +120,7 @@ def parse_listing_card(card) -> dict | None:
 
 
 def fetch_deadline_from_detail(link: str, debug_dump=False) -> str:
-    """Fetch detail page to parse deadline."""
+    """Fetch detail page and extract apply by deadline."""
     resp = polite_get(link)
     if resp is None:
         return ""
@@ -133,7 +131,17 @@ def fetch_deadline_from_detail(link: str, debug_dump=False) -> str:
         with open(os.path.join(BASE_DIR, "data", "debug", fname), "w", encoding="utf-8") as f:
             f.write(resp.text)
 
-    text = BeautifulSoup(resp.text, "html.parser").get_text(separator="\n")
+    soup = BeautifulSoup(resp.text, "html.parser")
+    # 1. Primary: Direct structured other_detail_item selector
+    for item in soup.select(".other_detail_item"):
+        h = item.select_one(".item_heading")
+        if h and "apply by" in h.get_text().lower():
+            b = item.select_one(".item_body")
+            if b and b.get_text(strip=True):
+                return b.get_text(strip=True)
+
+    # 2. Fallback: contextual regex on full text
+    text = soup.get_text(separator="\n")
     for pattern in DEADLINE_CONTEXT_PATTERNS:
         m = pattern.search(text)
         if not m:
@@ -194,10 +202,9 @@ def scrape(debug_dump=False, max_pages_per_url=2) -> list:
     logger.info("Internshala scrape complete: %d verified CSE listings collected", len(results))
 
     if FETCH_DEADLINE_DETAIL and results:
-        existing_ids = set(load_internships().keys())
-        new_results = [r for r in results if r["id"] not in existing_ids]
-        to_fetch = new_results[:MAX_DETAIL_FETCHES_PER_RUN]
-        logger.info("Fetching deadlines for %d/%d new listings", len(to_fetch), len(new_results))
+        existing = load_internships()
+        to_fetch = [r for r in results if not r.get("apply_by") and not existing.get(r["id"], {}).get("apply_by")][:MAX_DETAIL_FETCHES_PER_RUN]
+        logger.info("Fetching deadlines for %d listings without captured deadline", len(to_fetch))
         for i, r in enumerate(to_fetch):
             r["apply_by"] = fetch_deadline_from_detail(r["link"], debug_dump=(debug_dump and i == 0))
 
@@ -212,4 +219,4 @@ if __name__ == "__main__":
     listings = scrape(debug_dump=args.debug_dump)
     print(f"Collected {len(listings)} listings")
     for l in listings[:5]:
-        print(f"[{l.get('domain', 'Tech')}] {l['title']} @ {l['company']} | {l['location']} | {l['stipend_text']}")
+        print(f"[{l.get('domain', 'Tech')}] {l['title']} @ {l['company']} | Deadline: {l['apply_by']}")

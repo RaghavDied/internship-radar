@@ -880,7 +880,7 @@ def build():
     internships = load_internships()
     applications = load_applications()
     today = date.today().isoformat()
-    stale_cutoff = (date.today() - timedelta(days=21)).isoformat()
+    unlisted_cutoff = (date.today() - timedelta(days=7)).isoformat()
 
     # IST Time formatting
     IST = timezone(timedelta(hours=5, minutes=30))
@@ -891,23 +891,23 @@ def build():
     for iid, rec in internships.items():
         raw_apply_by = (rec.get("apply_by") or "").strip()
         apply_iso = _parse_deadline_to_iso(raw_apply_by)
+        last_seen = (rec.get("last_seen_at") or "")[:10]
         first_seen = (rec.get("first_seen_at") or "")[:10]
 
         # Determine exact expiration state
         if apply_iso:
             is_expired = apply_iso < today
-            if is_expired:
-                deadline_label = raw_apply_by
-            else:
-                deadline_label = raw_apply_by
+            deadline_label = raw_apply_by
         else:
             # No explicit date
-            if first_seen and first_seen < stale_cutoff:
-                is_expired = True
-                deadline_label = "Past (Stale)"
-            else:
+            # If the scraper actively spotted it on the site within the last 7 days, it is LIVE & ACTIVE!
+            if last_seen and last_seen >= unlisted_cutoff:
                 is_expired = False
-                deadline_label = "Rolling / Open"
+                deadline_label = "Rolling / Active"
+            else:
+                # Dropped off the search results for more than a week
+                is_expired = True
+                deadline_label = "Closed / Unlisted"
 
         app = applications.get(iid, {})
         status = app.get("status", "not_applied")
