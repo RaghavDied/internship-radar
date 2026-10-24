@@ -11,22 +11,25 @@ EXCLUDED_KEYWORDS = [
     "hotel", "hospitality", "chef", "cook", "culinary", "restaurant", "steward", "housekeeping", "food & beverage", "f&b",
     # Human Resources & Admin
     "human resources", "talent acquisition", "recruiter", "recruitment", "receptionist", "front office", "office assistant", "personal assistant", "executive assistant", "stenographer", "storyteller",
-    # Sales & BPO
-    "telecaller", "telecalling", "telesales", "inside sales", "b2b sales", "field sales", "sales executive", "business development associate", "bda", "bde", "cold calling",
+    # Sales & BPO & Business Dev (Strict non-tech)
+    "telecaller", "telecalling", "telesales", "inside sales", "b2b sales", "field sales", "sales executive", "sales intern", "sales",
+    "business development", "bda", "bde", "cold calling", "lead generation", "client acquisition", "market research", "business operations",
+    # Marketing & Social Media (pure non-engineering)
+    "marketing", "social media", "brand marketing", "growth marketing", "digital marketing", "seo intern", "public relations",
     # Accounting & Finance
     "chartered accountant", "accounts executive", "bookkeeping", "audit intern", "taxation", "tally", "finance intern",
     # Content & Media (non-tech)
     "content writer", "content writing", "copywriter", "ghostwriter", "seo writer", "creative writer", "journalist", "news anchor", "voiceover",
-    # Creative Design (pure non-engineering)
-    "graphic designer", "video editor", "video editing", "fashion design", "interior design", "animator", "2d animator", "3d animator", "artist",
+    # Creative Design & Video (pure non-engineering)
+    "graphic designer", "graphic design", "visual design", "video editor", "video editing", "fashion design", "interior design", "animator", "2d animator", "3d animator", "artist",
     # Healthcare & Others
-    "nursing", "dietitian", "nutritionist", "pharmacy", "medical officer", "dentist", "tour guide", "event management", "event coordinator", "legal intern", "law intern",
+    "nursing", "dietitian", "nutritionist", "pharmacy", "medical officer", "dentist", "tour guide", "event management", "event coordinator", "legal intern", "law intern", "founders office",
 ]
 
 # Core CSE domain patterns
 DOMAIN_PATTERNS = {
     "AI / ML": [
-        r"\b(machine learning|deep learning|data science|ai|artificial intelligence|nlp|computer vision|llm|genai|neural network|pytorch|tensorflow|scikit-learn)\b"
+        r"\b(machine learning|deep learning|data science|ai engineer|ai developer|artificial intelligence|nlp|computer vision|llm|genai|neural network|pytorch|tensorflow|scikit-learn)\b"
     ],
     "Full Stack": [
         r"\b(full\s*stack|fullstack|mern|mean)\b"
@@ -74,7 +77,6 @@ TAG_REGEXES = {
     tag: re.compile(r"\b" + re.escape(tag.lower()) + r"\b", re.IGNORECASE)
     for tag in TECH_TAGS
 }
-# Special case for C++ and .NET and C#
 TAG_REGEXES["C++"] = re.compile(r"(?:\bc\+\+|\bcxx\b)", re.IGNORECASE)
 TAG_REGEXES["C#"] = re.compile(r"(?:\bc\#|\bc-sharp\b)", re.IGNORECASE)
 TAG_REGEXES[".NET"] = re.compile(r"(?:\.net|dotnet)\b", re.IGNORECASE)
@@ -88,16 +90,16 @@ def classify_cse_role(title: str, description: str = "") -> dict:
     Returns:
         {
             "is_cse": bool,
-            "domain": str, # e.g. 'Backend', 'AI / ML', 'Full Stack'
-            "score": int, # 0-100 relevance score
-            "tags": list[str], # Extracted tech tags
-            "reason": str # Explanation if rejected or matched
+            "domain": str,
+            "score": int,
+            "tags": list[str],
+            "reason": str
         }
     """
     text = f"{title} {description}".lower()
     title_lower = title.lower()
 
-    # Step 1: Check negative blacklist against title and description
+    # Step 1: Check negative blacklist against title
     for bad in EXCLUDED_KEYWORDS:
         bad_pattern = rf"\b{re.escape(bad)}\b"
         if re.search(bad_pattern, title_lower):
@@ -114,10 +116,10 @@ def classify_cse_role(title: str, description: str = "") -> dict:
     for domain, patterns in DOMAIN_PATTERNS.items():
         for pat in patterns:
             if re.search(pat, title_lower, re.IGNORECASE):
-                matched_domains.append((domain, 2)) # high weight for title match
+                matched_domains.append((domain, 2))
                 break
             elif description and re.search(pat, text, re.IGNORECASE):
-                matched_domains.append((domain, 1)) # lower weight for desc match
+                matched_domains.append((domain, 1))
                 break
 
     # Extract tech tags
@@ -127,9 +129,7 @@ def classify_cse_role(title: str, description: str = "") -> dict:
             extracted_tags.append(tag)
 
     # Step 3: Determine if it qualifies as CSE
-    # If title matched a domain or has explicit tech tags
     if matched_domains:
-        # Pick the domain with highest weight, or default to first
         primary_domain = matched_domains[0][0]
         score = 80 + min(len(extracted_tags) * 4, 20)
         return {
@@ -140,7 +140,6 @@ def classify_cse_role(title: str, description: str = "") -> dict:
             "reason": f"Matched CSE domain '{primary_domain}'"
         }
 
-    # If title mentions developer, engineer, intern with coding tags
     if extracted_tags and any(k in title_lower for k in ["developer", "engineer", "programmer", "intern", "trainee", "tech"]):
         return {
             "is_cse": True,
@@ -150,7 +149,6 @@ def classify_cse_role(title: str, description: str = "") -> dict:
             "reason": f"Tech stack tags identified: {', '.join(extracted_tags[:3])}"
         }
 
-    # If no CSE indicators matched
     return {
         "is_cse": False,
         "domain": "Unrelated",
@@ -161,6 +159,5 @@ def classify_cse_role(title: str, description: str = "") -> dict:
 
 
 def is_cse_internship(title: str, description: str = "") -> bool:
-    """Convenience boolean helper."""
     result = classify_cse_role(title, description)
     return result["is_cse"]

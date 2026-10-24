@@ -1,0 +1,12 @@
+How to use and run it:
+Live Web Dashboard: Visit https://raghavdied.github.io/internship-radar/
+ on your phone or desktop.
+Run scrapers manually anytime on your machine:
+bash
+python run_all.py
+Preview the dashboard locally: Double click docs/index.html or run python -m http.server 8000 --directory docs.
+Track applications & search from terminal:
+bash
+python track.py stats
+python track.py search react
+python track.py apply <id> -n "referral"
