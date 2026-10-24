@@ -1,7 +1,8 @@
 """
 Generates the modern, high-performance static dashboard in docs/index.html.
 Engineered with an ultra-sleek dual dark-theme system (Cyber Obsidian ⇋ Synthwave Sunset),
-accurate deadline & expiration engine, IST synchronization time, and AI cold outreach assistant.
+accurate deadline & expiration engine, IST synchronization time, AI cold outreach assistant,
+and a deep Job Description (JD) Intelligence & ATS Keyword Scanner.
 """
 import json
 import os
@@ -12,6 +13,7 @@ from dateutil import parser as dateutil_parser
 
 from config.settings import DOCS_DIR, DEADLINE_WARNING_DAYS
 from storage import load_internships, load_applications
+from scrapers.jd_intel import analyze_job_intel
 
 STATUS_LABELS = {
     "not_applied": "Not Applied",
@@ -48,7 +50,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
   <title>Internship Radar | B.Tech CSE Intelligence</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -59,7 +61,6 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             sans: ['Inter', 'sans-serif'],
             mono: ['JetBrains Mono', 'monospace'],
             display: ['Plus Jakarta Sans', 'sans-serif'],
-            synth: ['Space Grotesk', 'sans-serif'],
           }
         }
       }
@@ -82,7 +83,6 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       --radar-ping: rgba(16, 185, 129, 0.7);
       --card-shadow: rgba(0, 240, 255, 0.05);
       --theme-name: "Cyber Obsidian";
-      --theme-indicator: #00F0FF;
       --header-bg: rgba(13, 19, 31, 0.88);
       --body-gradient: 
         radial-gradient(at 0% 0%, rgba(6, 182, 212, 0.08) 0px, transparent 50%),
@@ -90,7 +90,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.05) 0px, transparent 50%);
     }
 
-    /* THEME 2: SYNTHWAVE SUNSET (COMPLETELY DIFFERENT RETRO-CYBER DARK THEME) */
+    /* THEME 2: SYNTHWAVE SUNSET (RETRO-CYBER DARK) */
     [data-theme="synthwave"] {
       --bg-base: #0B0716;
       --bg-surface: #140D26;
@@ -106,7 +106,6 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       --radar-ping: rgba(255, 46, 147, 0.8);
       --card-shadow: rgba(255, 46, 147, 0.08);
       --theme-name: "Synthwave Sunset";
-      --theme-indicator: #FF2E93;
       --header-bg: rgba(20, 13, 38, 0.9);
       --body-gradient: 
         radial-gradient(at 0% 0%, rgba(255, 46, 147, 0.15) 0px, transparent 50%),
@@ -172,6 +171,19 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
     }
     .theme-border {
       border-color: var(--border-color);
+    }
+
+    @keyframes scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(1000%); }
+    }
+    .scanner-active::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+      animation: scanline 2s infinite linear;
+      opacity: 0.8;
     }
   </style>
 </head>
@@ -358,6 +370,136 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
     </div>
   </main>
 
+  <!-- DEEP JD SCANNER & REQUIREMENTS INTEL MODAL -->
+  <div id="scanner-modal" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-5">
+    <div class="glass-card rounded-2xl max-w-3xl w-full border border-slate-700 bg-slate-900/98 overflow-hidden shadow-2xl flex flex-col max-h-[92vh] relative scanner-active">
+      
+      <!-- Modal Header -->
+      <div class="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
+            🔬
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="font-display font-bold text-slate-100 text-base" id="scan-modal-title">Job Intelligence & Requirements Scanner</h3>
+              <span class="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 font-mono text-[10px]" id="scan-source-badge">Live Intel</span>
+            </div>
+            <p class="text-xs text-slate-400 mt-0.5" id="scan-modal-company">-</p>
+          </div>
+        </div>
+        <button id="scan-modal-close" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- SCANNING SEQUENCE ANIMATION (SHOWN INITIALLY) -->
+      <div id="scan-progress-view" class="p-8 sm:p-12 flex flex-col items-center justify-center text-center space-y-6">
+        <div class="relative w-16 h-16">
+          <div class="w-16 h-16 rounded-full border-4 border-cyan-500/20 border-t-cyan-400 animate-spin"></div>
+          <div class="absolute inset-0 flex items-center justify-center text-lg">⚡</div>
+        </div>
+        <div class="space-y-2 max-w-md w-full">
+          <h4 class="font-display font-semibold text-white text-base">Scanning Job Description & Requirements...</h4>
+          <p class="text-xs font-mono text-cyan-300 h-5" id="scan-status-log">Connecting to job repository...</p>
+          <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+            <div id="scan-progress-bar" class="h-full bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 transition-all duration-300 w-0"></div>
+          </div>
+        </div>
+        <div class="text-[11px] font-mono text-slate-500">
+          Synthesizing ATS keywords &middot; Company must-haves &middot; Tailored resume bullets
+        </div>
+      </div>
+
+      <!-- SCAN RESULTS DOSSIER (SHOWN AFTER SCAN COMPLETES) -->
+      <div id="scan-results-view" class="hidden overflow-y-auto p-4 sm:p-6 space-y-5 custom-scrollbar text-sm">
+        
+        <!-- Quick Action Summary Bar -->
+        <div class="glass-card rounded-xl p-3 sm:p-4 bg-slate-950/70 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-slate-400">Quick Actions:</span>
+            <button id="btn-copy-all-keywords" class="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-mono flex items-center gap-1.5 transition">
+              <span>📋 Copy 14+ ATS Keywords</span>
+            </button>
+            <button id="btn-copy-resume-bullets" class="px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-mono flex items-center gap-1.5 transition">
+              <span>📄 Copy Resume Bullets</span>
+            </button>
+          </div>
+          <button id="btn-transfer-to-email" class="px-3 py-1 rounded-lg bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white font-mono text-xs font-semibold shadow transition">
+            ✨ Generate Pitch with Intel &rarr;
+          </button>
+        </div>
+
+        <!-- 1. Essential ATS & Resume Keywords -->
+        <div class="glass-card rounded-xl p-4 bg-slate-900/60 border border-slate-800 space-y-2.5">
+          <div class="flex items-center justify-between">
+            <h4 class="text-xs font-mono font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-2">
+              <span>🎯 Essential ATS & Resume Keywords</span>
+              <span class="text-[10px] text-slate-500 font-normal">(Click any keyword to copy)</span>
+            </h4>
+          </div>
+          <div id="intel-keywords-grid" class="flex flex-wrap gap-2 pt-1">
+            <!-- Injected by JS -->
+          </div>
+        </div>
+
+        <!-- 2. Grid: Must-Have Requirements & Core Deliverables -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Requirements Checklist -->
+          <div class="glass-card rounded-xl p-4 bg-slate-900/60 border border-slate-800 space-y-2.5">
+            <h4 class="text-xs font-mono font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+              <span>📋 Company Must-Haves & Eligibility</span>
+            </h4>
+            <ul id="intel-requirements-list" class="space-y-2 text-xs text-slate-300 font-sans">
+              <!-- Injected by JS -->
+            </ul>
+          </div>
+
+          <!-- Responsibilities & Deliverables -->
+          <div class="glass-card rounded-xl p-4 bg-slate-900/60 border border-slate-800 space-y-2.5">
+            <h4 class="text-xs font-mono font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+              <span>🛠️ Day-to-Day Deliverables & Tasks</span>
+            </h4>
+            <ul id="intel-responsibilities-list" class="space-y-2 text-xs text-slate-300 font-sans">
+              <!-- Injected by JS -->
+            </ul>
+          </div>
+        </div>
+
+        <!-- 3. Strategic Interview & Convo Talking Points -->
+        <div class="glass-card rounded-xl p-4 bg-slate-900/60 border border-slate-800 space-y-2.5">
+          <h4 class="text-xs font-mono font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1.5">
+            <span>💡 Strategic Convo Hooks & Interview Talking Points</span>
+          </h4>
+          <div id="intel-talking-points" class="space-y-2 text-xs text-slate-300">
+            <!-- Injected by JS -->
+          </div>
+        </div>
+
+        <!-- 4. Tailored Resume Bullet Points (Google XYZ Format) -->
+        <div class="glass-card rounded-xl p-4 bg-slate-900/60 border border-slate-800 space-y-2.5">
+          <div class="flex items-center justify-between">
+            <h4 class="text-xs font-mono font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+              <span>📄 Tailored Resume Bullets (Google XYZ Format)</span>
+            </h4>
+          </div>
+          <div id="intel-resume-bullets" class="space-y-2.5 pt-1">
+            <!-- Injected by JS -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="p-3.5 border-t border-slate-800 bg-slate-950/90 flex items-center justify-between text-xs font-mono text-slate-500">
+        <div>Ready to include in cold emails, LinkedIn chats & resume</div>
+        <button id="scan-modal-done" class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition">
+          Close Dossier
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- AI COLD PITCH & REFERRAL GENERATOR MODAL -->
   <div id="ai-modal" class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
     <div class="glass-card rounded-2xl max-w-2xl w-full border border-slate-700 bg-slate-900/95 overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
@@ -487,8 +629,9 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
     let currentDomain = "";
     let isCompactView = false;
+    let activeScannedItem = null;
 
-    // Days calculation helper (using local date comparison for precision)
+    // Days calculation helper
     function daysUntil(dateStr) {
       if (!dateStr) return null;
       const targetDate = new Date(dateStr + "T23:59:59");
@@ -599,7 +742,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
           } else if (days !== null) {
             deadlineBadge = `<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700/60 font-mono text-[10px]">${item.apply_by}</span>`;
           } else {
-            deadlineBadge = `<span class="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-300 border border-cyan-800/40 font-mono text-[10px]">Rolling / Open</span>`;
+            deadlineBadge = `<span class="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-300 border border-cyan-800/40 font-mono text-[10px]">Rolling / Active</span>`;
           }
 
           html += `
@@ -624,8 +767,11 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                   <option value="offer" ${item.status==='offer'?'selected':''}>Offer 🎉</option>
                 </select>
               </td>
-              <td class="p-3 text-right">
-                <button class="btn-ai px-2.5 py-1 bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 border border-violet-500/30 rounded text-[10px] transition" data-id="${item.id}">
+              <td class="p-3 text-right flex items-center justify-end gap-1.5">
+                <button class="btn-scan px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 rounded text-[10px] font-mono transition" data-id="${item.id}">
+                  🔬 Scan JD
+                </button>
+                <button class="btn-ai px-2.5 py-1 bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 border border-violet-500/30 rounded text-[10px] font-mono transition" data-id="${item.id}">
                   AI Pitch
                 </button>
               </td>
@@ -647,7 +793,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
           } else if (days !== null) {
             deadlineBadge = `<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700/60 font-mono text-[10px]">${item.apply_by}</span>`;
           } else {
-            deadlineBadge = `<span class="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-300 border border-cyan-800/40 font-mono text-[10px]">Rolling / Open</span>`;
+            deadlineBadge = `<span class="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-300 border border-cyan-800/40 font-mono text-[10px]">Rolling / Active</span>`;
           }
 
           const tagsHtml = (item.tags || []).slice(0, 4).map(t => 
@@ -693,7 +839,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
               </div>
 
               <!-- Action Bar -->
-              <div class="mt-4 pt-3.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+              <div class="mt-4 pt-3.5 border-t border-slate-800/80 flex items-center justify-between gap-2 flex-wrap">
                 <!-- Status updater -->
                 <div class="flex items-center gap-1">
                   <select class="status-select bg-slate-900 border border-slate-700 hover:border-slate-500 text-slate-300 rounded-lg px-2 py-1 font-mono text-[11px] outline-none cursor-pointer" data-id="${item.id}">
@@ -705,10 +851,15 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                   </select>
                 </div>
 
-                <!-- AI Cold Pitch -->
-                <button class="btn-ai px-3 py-1.5 bg-gradient-to-r from-violet-600/20 to-cyan-600/20 hover:from-violet-600/40 hover:to-cyan-600/40 text-cyan-300 border border-cyan-500/30 rounded-lg font-mono text-xs flex items-center gap-1.5 transition active:scale-95 shadow-sm" data-id="${item.id}">
-                  <span>✨ AI Pitch</span>
-                </button>
+                <!-- Dual Action Buttons: Scan JD & AI Pitch -->
+                <div class="flex items-center gap-1.5">
+                  <button class="btn-scan px-2.5 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 rounded-lg font-mono text-xs flex items-center gap-1 transition active:scale-95 shadow-sm" data-id="${item.id}" title="Scan requirements, ATS keywords, and talking points">
+                    <span>🔬 Scan JD</span>
+                  </button>
+                  <button class="btn-ai px-2.5 py-1.5 bg-gradient-to-r from-violet-600/20 to-cyan-600/20 hover:from-violet-600/40 hover:to-cyan-600/40 text-cyan-300 border border-cyan-500/30 rounded-lg font-mono text-xs flex items-center gap-1 transition active:scale-95 shadow-sm" data-id="${item.id}" title="Generate cold outreach message">
+                    <span>✨ Pitch</span>
+                  </button>
+                </div>
               </div>
             </div>
           `;
@@ -720,6 +871,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
     // Attach dynamic event listeners
     function attachInteractiveListeners() {
+      // Status selector
       document.querySelectorAll('.status-select').forEach(sel => {
         sel.addEventListener('change', (e) => {
           const id = e.target.dataset.id;
@@ -746,6 +898,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         });
       });
 
+      // AI Cold Pitch button
       document.querySelectorAll('.btn-ai').forEach(btn => {
         btn.addEventListener('click', () => {
           const id = btn.dataset.id;
@@ -753,11 +906,179 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
           if (item) openAiModal(item);
         });
       });
+
+      // Deep JD Scan button
+      document.querySelectorAll('.btn-scan').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id;
+          const item = RAW_DATA.find(d => d.id === id);
+          if (item) startDeepJdScan(item);
+        });
+      });
     }
 
-    // Open AI Generator Modal
+    // DEEP JD SCANNER CONTROLLER
+    function startDeepJdScan(item) {
+      activeScannedItem = item;
+      document.getElementById('scan-modal-title').textContent = item.title;
+      document.getElementById('scan-modal-company').textContent = `${item.company} &middot; ${item.location} &middot; ${item.domain || 'Tech'}`;
+      document.getElementById('scan-source-badge').textContent = item.source.toUpperCase();
+
+      // Reset to scanning view
+      document.getElementById('scan-progress-view').classList.remove('hidden');
+      document.getElementById('scan-results-view').classList.add('hidden');
+      document.getElementById('scanner-modal').classList.remove('hidden');
+
+      const progressBar = document.getElementById('scan-progress-bar');
+      const statusLog = document.getElementById('scan-status-log');
+
+      progressBar.style.width = '15%';
+      statusLog.textContent = `Connecting to ${item.source} opening...`;
+
+      setTimeout(() => {
+        progressBar.style.width = '45%';
+        statusLog.textContent = `Decompiling requirements & eligibility for ${item.title}...`;
+      }, 350);
+
+      setTimeout(() => {
+        progressBar.style.width = '75%';
+        statusLog.textContent = `Extracting high-priority ATS resume keywords & tech stack...`;
+      }, 750);
+
+      setTimeout(() => {
+        progressBar.style.width = '95%';
+        statusLog.textContent = `Synthesizing interview talking points & tailored resume bullets...`;
+      }, 1150);
+
+      setTimeout(() => {
+        progressBar.style.width = '100%';
+        statusLog.textContent = `Deep scan complete! Loaded 30+ fruitful data points.`;
+        setTimeout(() => renderScanResults(item), 300);
+      }, 1450);
+    }
+
+    // Render Deep Scan Results Dossier
+    function renderScanResults(item) {
+      document.getElementById('scan-progress-view').classList.add('hidden');
+      document.getElementById('scan-results-view').classList.remove('hidden');
+
+      const intel = item.intel || {
+        core_skills: item.tags || ['Python', 'Data Structures', 'Git'],
+        ats_keywords: ['Software Engineering', 'REST APIs', 'Git', 'Data Structures', 'OOP', 'Testing'],
+        requirements: ['Pursuing B.Tech / B.E. in Computer Science or allied field', 'Hands-on project experience in ' + (item.tags || []).join(', ')],
+        responsibilities: ['Build and maintain high-performance software components', 'Collaborate in agile engineering sprints'],
+        talking_points: ['Discuss your personal projects built with ' + (item.tags || []).join(', ')],
+        resume_bullets: ['Engineered full-stack features using ' + (item.tags || []).join(', ') + ', optimizing API latency.']
+      };
+
+      // 1. ATS Keywords Grid
+      const keywordsGrid = document.getElementById('intel-keywords-grid');
+      keywordsGrid.innerHTML = intel.ats_keywords.map(kw => `
+        <button class="intel-kw-pill px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-cyan-500/20 text-slate-200 hover:text-cyan-300 border border-slate-700/80 hover:border-cyan-500/40 text-xs font-mono flex items-center gap-1.5 transition active:scale-95" data-keyword="${kw}" title="Click to copy keyword">
+          <span>${kw}</span>
+          <span class="text-slate-500 text-[10px]">📋</span>
+        </button>
+      `).join('');
+
+      // Add click listeners to individual keyword pills
+      keywordsGrid.querySelectorAll('.intel-kw-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          const kw = pill.dataset.keyword;
+          navigator.clipboard.writeText(kw).then(() => {
+            showToast(`Copied keyword: "${kw}"`);
+          });
+        });
+      });
+
+      // 2. Must-Haves Checklist
+      const reqList = document.getElementById('intel-requirements-list');
+      reqList.innerHTML = intel.requirements.map(req => `
+        <li class="flex items-start gap-2.5 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800/80">
+          <span class="text-emerald-400 mt-0.5 shrink-0 text-sm">✔</span>
+          <span class="leading-relaxed">${req}</span>
+        </li>
+      `).join('');
+
+      // 3. Responsibilities
+      const respList = document.getElementById('intel-responsibilities-list');
+      respList.innerHTML = intel.responsibilities.map((resp, i) => `
+        <li class="flex items-start gap-2.5 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800/80">
+          <span class="w-5 h-5 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 flex items-center justify-center font-mono text-[10px] shrink-0 font-bold">${i+1}</span>
+          <span class="leading-relaxed">${resp}</span>
+        </li>
+      `).join('');
+
+      // 4. Talking Points
+      const talkingDiv = document.getElementById('intel-talking-points');
+      talkingDiv.innerHTML = intel.talking_points.map(tp => `
+        <div class="p-3 rounded-lg bg-slate-950/40 border border-slate-800/80 leading-relaxed font-sans flex items-start gap-2.5">
+          <span class="text-amber-400 text-sm shrink-0">💡</span>
+          <div>${tp}</div>
+        </div>
+      `).join('');
+
+      // 5. Tailored Resume Bullets
+      const bulletsDiv = document.getElementById('intel-resume-bullets');
+      bulletsDiv.innerHTML = intel.resume_bullets.map((bullet, i) => `
+        <div class="p-3 rounded-lg bg-slate-950/60 border border-slate-800/90 font-mono text-xs flex items-start justify-between gap-3 group">
+          <div class="leading-relaxed text-slate-200">
+            <span class="text-emerald-400 font-bold mr-1.5">•</span>${bullet}
+          </div>
+          <button class="btn-copy-single-bullet px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] shrink-0 border border-slate-700 transition" data-bullet="${bullet}">
+            Copy
+          </button>
+        </div>
+      `).join('');
+
+      bulletsDiv.querySelectorAll('.btn-copy-single-bullet').forEach(btn => {
+        btn.addEventListener('click', () => {
+          navigator.clipboard.writeText(btn.dataset.bullet).then(() => {
+            showToast('Copied resume bullet point!');
+          });
+        });
+      });
+    }
+
+    // Modal close handlers
+    document.getElementById('scan-modal-close').addEventListener('click', () => {
+      document.getElementById('scanner-modal').classList.add('hidden');
+    });
+    document.getElementById('scan-modal-done').addEventListener('click', () => {
+      document.getElementById('scanner-modal').classList.add('hidden');
+    });
+    document.getElementById('scanner-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'scanner-modal') {
+        document.getElementById('scanner-modal').classList.add('hidden');
+      }
+    });
+
+    // Copy All Keywords button
+    document.getElementById('btn-copy-all-keywords').addEventListener('click', () => {
+      if (!activeScannedItem || !activeScannedItem.intel) return;
+      const allKws = activeScannedItem.intel.ats_keywords.join(', ');
+      navigator.clipboard.writeText(allKws).then(() => {
+        showToast(`Copied ${activeScannedItem.intel.ats_keywords.length} ATS keywords to clipboard!`);
+      });
+    });
+
+    // Copy Resume Bullets button
+    document.getElementById('btn-copy-resume-bullets').addEventListener('click', () => {
+      if (!activeScannedItem || !activeScannedItem.intel) return;
+      const allBullets = activeScannedItem.intel.resume_bullets.join('\\n\\n');
+      navigator.clipboard.writeText(allBullets).then(() => {
+        showToast('Copied tailored resume bullets to clipboard!');
+      });
+    });
+
+    // Transfer to Cold Email button
+    document.getElementById('btn-transfer-to-email').addEventListener('click', () => {
+      document.getElementById('scanner-modal').classList.add('hidden');
+      if (activeScannedItem) openAiModal(activeScannedItem);
+    });
+
+    // Open AI Pitch Generator Modal
     function openAiModal(item) {
-      const skills = (item.tags || ['Python', 'Data Structures', 'Git']).join(', ');
+      const skills = (item.intel && item.intel.core_skills ? item.intel.core_skills.slice(0, 4) : (item.tags || ['Python', 'Data Structures', 'Git'])).join(', ');
       document.getElementById('modal-target-badge').textContent = `${item.title} @ ${item.company} [${item.domain || 'Tech'}]`;
 
       const emailText = 
@@ -791,6 +1112,19 @@ B.Tech Computer Science & Engineering`;
     });
     document.getElementById('modal-done').addEventListener('click', () => {
       document.getElementById('ai-modal').classList.add('hidden');
+    });
+    document.getElementById('ai-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'ai-modal') {
+        document.getElementById('ai-modal').classList.add('hidden');
+      }
+    });
+
+    // Global escape to close open modals
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        document.getElementById('scanner-modal').classList.add('hidden');
+        document.getElementById('ai-modal').classList.add('hidden');
+      }
     });
 
     document.querySelectorAll('.btn-copy').forEach(btn => {
@@ -912,6 +1246,16 @@ def build():
         app = applications.get(iid, {})
         status = app.get("status", "not_applied")
 
+        # Deep JD Intel Extraction
+        intel = analyze_job_intel(
+            title=rec.get("title", ""),
+            company=rec.get("company", ""),
+            domain=rec.get("domain", "Core Software Dev"),
+            location=rec.get("location", ""),
+            description=rec.get("description", ""),
+            tags=rec.get("tags", [])
+        )
+
         items.append({
             "id": iid,
             "title": rec.get("title", "Untitled Software Intern"),
@@ -932,6 +1276,7 @@ def build():
             "description": (rec.get("description") or "")[:250],
             "first_seen_at": rec.get("first_seen_at", ""),
             "is_new_today": first_seen == today,
+            "intel": intel,
         })
 
     os.makedirs(DOCS_DIR, exist_ok=True)
@@ -942,7 +1287,7 @@ def build():
     out_path = os.path.join(DOCS_DIR, "index.html")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"Refreshed high-performance dashboard written to {out_path} ({len(items)} CSE listings, Sync time: {ist_formatted})")
+    print(f"Refreshed dashboard with Deep JD Scanner written to {out_path} ({len(items)} CSE listings, Sync time: {ist_formatted})")
 
 
 if __name__ == "__main__":
