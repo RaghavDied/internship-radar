@@ -1,18 +1,8 @@
 """
 Internshala scraper.
-
-Selectors below were fixed against REAL live HTML pulled by a user (this
-sandbox can't reach internshala.com itself). If Internshala changes their
-markup again in future:
-  1. Check the Action's log for "parsed 0 internships" warnings.
-  2. Run `python inspect_card.py` after `python -m scrapers.internshala --debug-dump`
-     to see one real card's HTML, and adjust `parse_listing_card()` below.
-
-Known quirk: the search-results cards do NOT carry a labelled deadline
-field. Internshala only surfaces "apply by <date>" as free text inside a
-listing's own detail page. So deadlines are fetched via a second request,
-per NEW listing only (see fetch_deadline_from_detail below), capped by
-MAX_DETAIL_FETCHES_PER_RUN so a big backlog doesn't blow up run time.
+Filtered strictly for B.Tech Computer Science / Engineering opportunities.
+Excludes non-tech promoted cards (HR, Hotel Management, Operations, etc.)
+and tags tech domain and skills.
 """
 import argparse
 import logging
@@ -34,20 +24,18 @@ logger = logging.getLogger("scraper.internshala")
 SOURCE_NAME = "internshala"
 ROOT = "https://internshala.com"
 
-# Stage 1: find the neighbourhood of text right after an "apply by" style
-# phrase (wide window - trailing words like "for this role" are common).
+# Stage 1: find the neighbourhood of text right after an "apply by" style phrase
 DEADLINE_CONTEXT_PATTERNS = [
     re.compile(r"apply\s+by\s+(.{3,40})", re.IGNORECASE),
     re.compile(r"last\s+date\s+to\s+apply\s*[:\-]?\s*(.{3,40})", re.IGNORECASE),
 ]
-# Stage 2: pull just the date token out of that window, either ordering
-# ('28 Aug 2026' / '28th Aug' or 'August 28' / 'Aug 28, 2026').
+# Stage 2: pull just the date token out of that window
 DATE_TOKEN_PATTERN = re.compile(
     r"(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:['\s]*\d{2,4})?"
     r"|[A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{2,4})?)"
 )
 
-DEADLINE_PATTERNS = DEADLINE_CONTEXT_PATTERNS  # kept for import compatibility
+DEADLINE_PATTERNS = DEADLINE_CONTEXT_PATTERNS
 
 
 def build_search_urls():
@@ -83,8 +71,7 @@ def _shorten_location(raw: str, max_cities: int = 2) -> str:
 
 
 def parse_listing_card(card) -> dict | None:
-    """Pull fields out of one internship card. Returns None if the card
-    doesn't look like a real listing."""
+    """Pull fields out of one internship card. Returns None if invalid."""
     try:
         title_el = card.select_one("a.job-title-href, h2.job-internship-name a")
         if not title_el:
@@ -96,8 +83,6 @@ def parse_listing_card(card) -> dict | None:
         link = title_el.get("href", "")
         link = urljoin(ROOT, link) if link else ""
 
-        # Company name specifically - NOT the wrapping div, which also
-        # contains the "Actively hiring" badge with no separating space.
         company_el = card.select_one("p.company-name")
         company = _text(company_el) or "Unknown"
 
@@ -108,9 +93,6 @@ def parse_listing_card(card) -> dict | None:
         stipend_el = card.select_one("span.stipend")
         stipend_text = _text(stipend_el) or "Not specified"
 
-        # Duration has no dedicated class - it's the span sibling of the
-        # calendar icon. Fall back to a plain .duration class in case
-        # Internshala uses it on some page variants.
         duration_el = (card.select_one("i.ic-16-calendar ~ span")
                         or card.select_one(".duration"))
         duration = _text(duration_el) or "Not specified"
@@ -128,7 +110,7 @@ def parse_listing_card(card) -> dict | None:
             "stipend_text": stipend_text,
             "stipend_amount": extract_stipend_number(stipend_text),
             "duration": duration,
-            "apply_by": "",  # filled in later for new listings only, see scrape()
+            "apply_by": "",  # filled in later for new listings only
             "posted": posted,
             "link": link,
             "description": description,
@@ -140,9 +122,7 @@ def parse_listing_card(card) -> dict | None:
 
 
 def fetch_deadline_from_detail(link: str, debug_dump=False) -> str:
-    """Fetch a listing's own page and search its text for an 'apply by'
-    style phrase. Returns '' if nothing matched - the dashboard will show
-    'Unknown' rather than a wrong guess."""
+    """Fetch detail page to parse deadline."""
     resp = polite_get(link)
     if resp is None:
         return ""
@@ -165,7 +145,7 @@ def fetch_deadline_from_detail(link: str, debug_dump=False) -> str:
     return ""
 
 
-def scrape(debug_dump=False, max_pages_per_url=5) -> list:
+def scrape(debug_dump=False, max_pages_per_url=2) -> list:
     results = []
     os.makedirs(os.path.join(BASE_DIR, "data", "debug"), exist_ok=True)
 
@@ -185,7 +165,7 @@ def scrape(debug_dump=False, max_pages_per_url=5) -> list:
             cards = soup.select("[id^=individual_internship]")
 
             if not cards:
-                logger.info("No cards found on %s (page %d) - stopping pagination for this URL", url, page)
+                logger.info("No cards found on %s (page %d)", url, page)
                 break
 
             page_count = 0
@@ -193,32 +173,33 @@ def scrape(debug_dump=False, max_pages_per_url=5) -> list:
                 parsed = parse_listing_card(card)
                 if not parsed:
                     continue
-                if not passes_filters(parsed["title"], parsed["description"], parsed["stipend_amount"]):
+
+                # Run CSE relevance check
+                passed, classification = passes_filters(parsed["title"], parsed["description"], parsed["stipend_amount"])
+                if not passed:
                     continue
+
+                parsed["domain"] = classification["domain"]
+                parsed["tags"] = classification["tags"]
+                parsed["cse_score"] = classification["score"]
                 parsed["id"] = make_id(parsed["link"], parsed["title"], parsed["company"])
                 results.append(parsed)
                 page_count += 1
 
-            logger.info("Parsed %d relevant internships from %s (page %d)", page_count, base_url, page)
+            logger.info("Parsed %d relevant CSE internships from %s (page %d)", page_count, base_url, page)
 
             if page_count == 0:
-                break  # likely ran out of pages
+                break
 
-    logger.info("Internshala listing scrape complete: %d listings collected", len(results))
+    logger.info("Internshala scrape complete: %d verified CSE listings collected", len(results))
 
     if FETCH_DEADLINE_DETAIL and results:
         existing_ids = set(load_internships().keys())
         new_results = [r for r in results if r["id"] not in existing_ids]
         to_fetch = new_results[:MAX_DETAIL_FETCHES_PER_RUN]
-        logger.info("Fetching deadlines for %d/%d new listings (capped at %d)",
-                     len(to_fetch), len(new_results), MAX_DETAIL_FETCHES_PER_RUN)
+        logger.info("Fetching deadlines for %d/%d new listings", len(to_fetch), len(new_results))
         for i, r in enumerate(to_fetch):
             r["apply_by"] = fetch_deadline_from_detail(r["link"], debug_dump=(debug_dump and i == 0))
-        if len(new_results) > MAX_DETAIL_FETCHES_PER_RUN:
-            logger.info("%d new listings left without a fetched deadline this run - "
-                         "they'll be picked up automatically over the next few days "
-                         "as MAX_DETAIL_FETCHES_PER_RUN allows.",
-                         len(new_results) - MAX_DETAIL_FETCHES_PER_RUN)
 
     return results
 
@@ -226,11 +207,9 @@ def scrape(debug_dump=False, max_pages_per_url=5) -> list:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--debug-dump", action="store_true",
-                         help="Save raw HTML of each fetched page to data/debug/ for selector debugging")
+    parser.add_argument("--debug-dump", action="store_true")
     args = parser.parse_args()
     listings = scrape(debug_dump=args.debug_dump)
     print(f"Collected {len(listings)} listings")
-    for l in listings[:8]:
-        print(" -", l["title"], "@", l["company"], "|", l["location"], "|",
-              l["stipend_text"], "|", l["duration"], "| apply by:", l["apply_by"] or "(not found)")
+    for l in listings[:5]:
+        print(f"[{l.get('domain', 'Tech')}] {l['title']} @ {l['company']} | {l['location']} | {l['stipend_text']}")

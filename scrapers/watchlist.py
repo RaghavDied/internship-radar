@@ -1,12 +1,6 @@
 """
-Watchlist scraper: for startups/companies that don't post to Internshala,
-add their careers page to config/watchlist.json. This scraper can't parse
-structured fields (every company site is different), so it does something
-simpler and more robust: it fetches the page, looks for internship-related
-keywords, and flags it as a "possible opening" for you to go check by hand.
-
-It also diffs against the previous snapshot's text so you only get pinged
-when something actually changed, not every single day for a static page.
+Watchlist scraper: watches specific startup careers pages defined in config/watchlist.json.
+Flags when careers pages mention internships and extracts relevant tech indicators.
 """
 import hashlib
 import json
@@ -18,6 +12,7 @@ from bs4 import BeautifulSoup
 
 from config.settings import WATCHLIST_FILE, BASE_DIR
 from scrapers.base import polite_get
+from scrapers.cse_filter import classify_cse_role
 from storage import make_id
 
 logger = logging.getLogger("scraper.watchlist")
@@ -82,35 +77,38 @@ def scrape() -> list:
         snapshots[url] = {"signature": sig}
 
         if mentions_intern:
-            # Grab a short snippet around the first mention for context
+            # Grab snippet around match
             match = INTERN_KEYWORDS.search(page_text)
-            start = max(0, match.start() - 80)
-            end = min(len(page_text), match.end() + 80)
-            snippet = page_text[start:end]
+            start = max(0, match.start() - 100)
+            end = min(len(page_text), match.end() + 100)
+            snippet = page_text[start:end].strip()
+
+            classification = classify_cse_role(f"Engineering Intern at {name}", snippet)
 
             results.append({
                 "id": make_id(url + ("#changed" if changed else ""), name, "watchlist"),
-                "title": f"Possible internship opening at {name}" + (" (page changed)" if changed else ""),
+                "title": f"Internship Opportunity at {name}" + (" (New Activity)" if changed else ""),
                 "company": name,
-                "location": "Check page",
-                "stipend_text": "Unknown - check page",
+                "location": "Careers Portal / Remote",
+                "stipend_text": "Check Company Careers Page",
                 "stipend_amount": 0,
-                "duration": "Unknown",
-                "apply_by": "Unknown",
-                "posted": "",
+                "duration": "Check Portal",
+                "apply_by": "Rolling / ASAP",
+                "posted": "Active",
                 "link": url,
-                "description": snippet,
+                "description": f"Careers page mention: {snippet[:200]}...",
                 "source": SOURCE_NAME,
+                "domain": classification["domain"] if classification["is_cse"] else "Core Software Dev",
+                "tags": classification["tags"],
+                "cse_score": max(classification["score"], 70),
             })
 
     _save_snapshots(snapshots)
-    logger.info("Watchlist scrape complete: %d flagged pages out of %d watched", len(results), len(companies))
     return results
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    listings = scrape()
-    print(f"Flagged {len(listings)} watchlist pages")
-    for l in listings:
-        print(" -", l["title"], "|", l["link"])
+    logging.basicConfig(level=logging.INFO)
+    print("Scraping watchlist...")
+    items = scrape()
+    print(f"Found {len(items)} watchlist opportunities")

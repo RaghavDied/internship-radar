@@ -1,42 +1,84 @@
 """
-Runs every scraper and merges results into data/internships.json.
-This is the single entry point GitHub Actions (and you, locally) calls daily.
+Master Execution Pipeline for Internship Radar.
+Runs all active scrapers (LinkedIn, Unstop, Internshala, Watchlist),
+merges results, validates B.Tech CSE relevance, and triggers dashboard generation.
 """
 import logging
 import sys
+import time
 
-from scrapers import internshala, watchlist
-from storage import upsert_internships
+from config.settings import ENABLED_SOURCES
+from scrapers import internshala, linkedin, unstop, watchlist
+from storage import upsert_internships, clean_and_enrich_database
+import generate_dashboard
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("run_all")
 
 
-def main():
+SCRAPER_REGISTRY = {
+    "linkedin": linkedin.scrape,
+    "unstop": unstop.scrape,
+    "internshala": internshala.scrape,
+    "watchlist": watchlist.scrape,
+}
+
+
+def run_scrapers() -> list[dict]:
     all_listings = []
     failures = []
 
-    for name, fn in [("internshala", internshala.scrape), ("watchlist", watchlist.scrape)]:
+    for name in ENABLED_SOURCES:
+        scraper_fn = SCRAPER_REGISTRY.get(name)
+        if not scraper_fn:
+            logger.warning("Scraper '%s' is not registered. Skipping.", name)
+            continue
+
+        start_time = time.time()
+        logger.info("Starting scraper: %s ...", name.upper())
         try:
-            listings = fn()
+            listings = scraper_fn()
+            duration = round(time.time() - start_time, 2)
+            logger.info("Scraper %s finished in %ss: %d listings collected", name.upper(), duration, len(listings))
             all_listings.extend(listings)
         except Exception as e:
-            logger.exception("Scraper %s crashed", name)
+            logger.exception("Scraper %s failed with error: %s", name, e)
             failures.append(name)
 
-    if not all_listings:
-        logger.warning("No listings collected this run. Nothing to merge.")
-    else:
+    return all_listings, failures
+
+
+def main():
+    logger.info("Initializing Daily Internship Scrape & Processing...")
+
+    all_listings, failures = run_scrapers()
+
+    if all_listings:
         stats = upsert_internships(all_listings)
-        logger.info("Merge complete: %d new, %d updated, %d total in store",
-                     stats["new"], stats["updated"], stats["total"])
+        logger.info(
+            "Upsert complete: %d new CSE listings, %d updated, %d rejected non-tech, %d total in database",
+            stats["new"], stats["updated"], stats.get("rejected_non_cse", 0), stats["total"]
+        )
+    else:
+        logger.warning("No listings collected this run.")
+
+    # Run database clean & enrichment check
+    cleanup_stats = clean_and_enrich_database()
+    logger.info("Database verification: %d active CSE listings maintained", cleanup_stats["kept_cse"])
+
+    # Automatically generate updated dashboard
+    logger.info("Building refreshed dashboard docs/index.html ...")
+    generate_dashboard.build()
 
     if failures:
-        logger.error("These scrapers failed and were skipped: %s", ", ".join(failures))
-        # Don't hard-fail the whole run over one broken scraper - partial
-        # data beats no data. But exit non-zero so Actions shows a warning.
-        sys.exit(1)
+        logger.warning("Completed with partial failures on scrapers: %s", ", ".join(failures))
+        # Keep non-zero return code for GitHub Actions warning visibility
+        return 1
+    
+    logger.info("All pipelines completed successfully.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    code = main()
+    sys.exit(code)

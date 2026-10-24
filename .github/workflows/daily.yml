@@ -4,10 +4,14 @@ on:
   schedule:
     # 03:00 UTC = 08:30 IST every day
     - cron: "0 3 * * *"
-  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+  workflow_dispatch: {}   # allows manual trigger from GitHub Actions UI
 
 permissions:
   contents: write
+
+concurrency:
+  group: scrape-pipeline
+  cancel-in-progress: false
 
 jobs:
   scrape:
@@ -20,16 +24,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run scrapers
+      - name: Run scrapers and build dashboard
         run: python run_all.py
-        continue-on-error: true   # a scraper breaking shouldn't block the dashboard rebuild
-
-      - name: Rebuild dashboard
-        run: python generate_dashboard.py
 
       - name: Commit updated data + dashboard
         run: |
